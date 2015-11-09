@@ -45,21 +45,54 @@ class Pinger:
             self.samples.add(1, False)
             print "Request timed out"
 
-    def ping(self, dst, seq=0):
-        # Convert the url to an IP
+    def traceroute(self, dst):
+        dst_ip = self.gethostname(dst);
+        for i in range(10):
+            s = self.make_socket()
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, pack('I', i))
+            p_id = random.randint(0, 65535)
+
+            packet = self.icmp(p_id, i)
+            sent = s.sendto(packet, (dst_ip, 1))
+            self.recv_tracert(s, p_id, time.time(), dst)
+
+    def recv_tracert(self, s, p_id, start_time, dst):
+        # Wait until data is available or timeout occurs
+        ready = select.select([s], [], [], 1)
+        if ready[0]:
+            recv_packet, addr = s.recvfrom(1024)
+
+            elapsed = 1000 * (time.time() - start_time)
+            ip = unpack('!BBHHHBBH4s4s', recv_packet[:20])
+            icmp = unpack('bbHHh', recv_packet[20:28])
+            hopNum = ip[5]
+
+            print "{0}\t{1}".format(hopNum, addr[0])
+        else:
+            print "Request timed out"
+
+    def make_socket(self):
+        # Create the socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_RAW,
+                              socket.IPPROTO_ICMP)
+        except socket.error as e:
+            print e
+            sys.exit()
+        return s
+
+    def gethostname(self, dst):
         try:
             dst_ip = socket.gethostbyname(dst)
         except socket.gaierror as e:
             print e
             return
+        return dst_ip
 
-        # Create the socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_RAW,socket.IPPROTO_ICMP)
-        except socket.error as e:
-            print e
-            return
-
+    def ping(self, dst, seq=0):
+        # Convert the url to an IP
+        dst_ip = self.gethostname(dst)
+        s = self.make_socket()
         p_id = random.randint(0, 65535)
         packet = self.icmp(p_id, seq)
         start_time = time.time()
@@ -92,34 +125,9 @@ class Pinger:
                     seq += 1
                     time.sleep(1)
         except KeyboardInterrupt:
-            self.print_summary(dst)
+            self.samples.print_summary(dst)
             sys.exit()
-        self.print_summary(dst)
-
-    def print_summary(self, dst):
-        full_summary = ""
-
-
-        total_packets = self.samples.total()
-        total_recvd = self.samples.total_recvd()
-        num_lost = self.samples.num_lost()
-        percent_lost = self.samples.percent_lost()
-
-        if(total_recvd > 0):
-            rtt_min = self.samples.min()
-            rtt_max = self.samples.max()
-            rtt_avg = self.samples.avg()
-            rtt_stddev = self.samples.std_dev()
-
-            full_summary += "round trip min/avg/max/stddev = {0}/{1}/{2}/{3} ms\n" \
-                .format(rtt_min, rtt_avg, rtt_max, rtt_stddev)
-
-        full_summary = "\n--- {0} ping statistics ---\n".format(
-            dst) + full_summary
-        full_summary += "{0} packets transmitted, {1} packets received, {2}% packet loss\n" \
-            .format(total_packets, total_recvd, percent_lost)
-
-        print full_summary
+        self.samples.print_summary(dst)
 
 
 class Sample:
@@ -128,7 +136,9 @@ class Sample:
         self.rtt = rtt
         self.received = received
 
+
 class SampleList:
+
     def __init__(self, samples=[]):
         self.samples = samples
 
@@ -141,7 +151,7 @@ class SampleList:
 
     def min(self):
         received = self.received()
-        least =  min(received, key=attrgetter('rtt'))
+        least = min(received, key=attrgetter('rtt'))
         return least.rtt
 
     def max(self):
@@ -163,7 +173,7 @@ class SampleList:
     def variance(self):
         avg = self.avg()
         received = self.received()
-        avg_diff =  map(lambda x: (x.rtt - avg)**2, received)
+        avg_diff = map(lambda x: (x.rtt - avg)**2, received)
         return sum(avg_diff) / len(avg_diff)
 
     def std_dev(self):
@@ -173,7 +183,7 @@ class SampleList:
     def percent_lost(self):
         received = self.received()
         total = float(self.total())
-        return (1 - (len(received) / total )) * 100
+        return (1 - (len(received) / total)) * 100
 
     def num_lost(self):
         received = self.received()
@@ -183,6 +193,29 @@ class SampleList:
         sample = Sample(rtt, received)
         self.samples.append(sample)
 
+    def print_summary(self, dst):
+        full_summary = ""
+
+        total_packets = self.total()
+        total_recvd = self.total_recvd()
+        num_lost = self.num_lost()
+        percent_lost = self.percent_lost()
+
+        if(total_recvd > 0):
+            rtt_min = self.min()
+            rtt_max = self.max()
+            rtt_avg = self.avg()
+            rtt_stddev = self.std_dev()
+
+            full_summary += "round trip min/avg/max/stddev = {0}/{1}/{2}/{3} ms\n" \
+                .format(rtt_min, rtt_avg, rtt_max, rtt_stddev)
+
+        full_summary = "\n--- {0} ping statistics ---\n".format(
+            dst) + full_summary
+        full_summary += "{0} packets transmitted, {1} packets received, {2}% packet loss\n" \
+            .format(total_packets, total_recvd, percent_lost)
+
+        print full_summary
 
 
 if __name__ == '__main__':
@@ -194,4 +227,4 @@ if __name__ == '__main__':
         count = int(sys.argv[2])
     dst = sys.argv[1]
 
-    pinger.ping_many(dst, count)
+    pinger.traceroute(dst)
