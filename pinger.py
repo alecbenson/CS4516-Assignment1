@@ -6,12 +6,13 @@ import select
 import time
 import sys
 import math
+from operator import attrgetter
 
 
 class Pinger:
 
     def __init__(self):
-        self.samples = []
+        self.samples = SampleList()
 
     def checksum(self, pkt):
         # Pad odd length packets
@@ -39,9 +40,9 @@ class Pinger:
 
             print "{0} bytes from {1}: icmp seq={2} ttl={3} time={4}" \
                 .format(bytes_recvd, addr[0], icmp[4], ip[5], elapsed)
-            self.samples.append(Sample(elapsed, True))
+            self.samples.add(elapsed, True)
         else:
-            self.samples.append(Sample(1, False))
+            self.samples.add(1, False)
             print "Request timed out"
 
     def ping(self, dst, seq=0):
@@ -97,28 +98,26 @@ class Pinger:
 
     def print_summary(self, dst):
         full_summary = ""
-        total_sent = len(self.samples)
-        total_recvd = len([s for s in self.samples if s.received == True])
 
-        num_lost = total_sent - total_recvd
-        percent_lost = (1 - (total_recvd / float(total_sent))) * 100
+
+        total_packets = self.samples.total()
+        total_recvd = self.samples.total_recvd()
+        num_lost = self.samples.num_lost()
+        percent_lost = self.samples.percent_lost()
 
         if(total_recvd > 0):
-            rtt_samples = [s.rtt for s in self.samples if s.received == True]
-            rtt_min = min(rtt_samples)
-            rtt_max = max(rtt_samples)
-            rtt_avg = sum(rtt_samples) / total_recvd
+            rtt_min = self.samples.min()
+            rtt_max = self.samples.max()
+            rtt_avg = self.samples.avg()
+            rtt_stddev = self.samples.std_dev()
 
-            rtt_avg_diff = map(lambda x: (x - rtt_avg)**2, rtt_samples)
-            rtt_variance = sum(rtt_avg_diff) / len(rtt_avg_diff)
-            rtt_stddev = math.sqrt(rtt_variance)
             full_summary += "round trip min/avg/max/stddev = {0}/{1}/{2}/{3} ms\n" \
                 .format(rtt_min, rtt_avg, rtt_max, rtt_stddev)
 
         full_summary = "\n--- {0} ping statistics ---\n".format(
             dst) + full_summary
         full_summary += "{0} packets transmitted, {1} packets received, {2}% packet loss\n" \
-            .format(total_sent, total_recvd, percent_lost)
+            .format(total_packets, total_recvd, percent_lost)
 
         print full_summary
 
@@ -128,6 +127,62 @@ class Sample:
     def __init__(self, rtt, received):
         self.rtt = rtt
         self.received = received
+
+class SampleList:
+    def __init__(self, samples=[]):
+        self.samples = samples
+
+    def total(self):
+        return len(self.samples)
+
+    def total_recvd(self):
+        received = self.received()
+        return len(received)
+
+    def min(self):
+        received = self.received()
+        least =  min(received, key=attrgetter('rtt'))
+        return least.rtt
+
+    def max(self):
+        received = self.received()
+        most = max(received, key=attrgetter('rtt'))
+        return most.rtt
+
+    def received(self):
+        return [s for s in self.samples if s.received == True]
+
+    def avg(self):
+        received = self.received()
+        sum_rtt = self.sum_rtt()
+        return sum_rtt / len(received)
+
+    def sum_rtt(self):
+        return sum(s.rtt for s in self.samples if s.received == True)
+
+    def variance(self):
+        avg = self.avg()
+        received = self.received()
+        avg_diff =  map(lambda x: (x.rtt - avg)**2, received)
+        return sum(avg_diff) / len(avg_diff)
+
+    def std_dev(self):
+        variance = self.variance()
+        return math.sqrt(variance)
+
+    def percent_lost(self):
+        received = self.received()
+        total = float(self.total())
+        return (1 - (len(received) / total )) * 100
+
+    def num_lost(self):
+        received = self.received()
+        return self.total() - len(received)
+
+    def add(self, rtt, received):
+        sample = Sample(rtt, received)
+        self.samples.append(sample)
+
 
 
 if __name__ == '__main__':
