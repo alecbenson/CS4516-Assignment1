@@ -1,3 +1,4 @@
+# Alec Benson - CS4516 Assignment #1
 import socket
 from struct import *
 import random
@@ -7,12 +8,27 @@ import time
 import sys
 import math
 from operator import attrgetter
+import argparse
 
 
 class Pinger:
 
     def __init__(self):
         self.samples = SampleList()
+
+    def icmp(self, seq=0):
+        typ = 8
+        code = 0
+        p_id = random.randint(0, 65535)
+
+        # Create the header so that we can fill in the CRC
+        header = pack('bbHHh', typ, code, 0, p_id, seq)
+        payload = "A" * 36
+
+        # Fill in the CRC for the packet
+        crc = socket.htons(self.checksum(header + payload))
+        header = pack('bbHHh', typ, code, crc, p_id, seq)
+        return header + payload
 
     def checksum(self, pkt):
         # Pad odd length packets
@@ -26,6 +42,77 @@ class Pinger:
         # Convert endianness
         shift = (s >> 8) & 0xFF
         return (shift | s << 8) & 0xFFFF
+
+    def traceroute(self, dst, max_hops):
+        dst_ip = self.gethostname(dst)
+        for i in range(1, max_hops + 1):
+            s = self.make_socket()
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, i)
+
+            packet = self.icmp(i)
+            s.sendto(packet, (dst_ip, 1))
+            self.recv_tracert(s, time.time(), dst_ip, i)
+
+    def recv_tracert(self, s, start_time, dst_ip, hopNum):
+        # Wait until data is available or timeout occurs
+        ready = select.select([s], [], [], 1)
+        if ready[0]:
+            recv_packet, addr = s.recvfrom(1024)
+
+            elapsed = 1000 * (time.time() - start_time)
+            ip = unpack('!BBHHHBBH4s4s', recv_packet[:20])
+            icmp = unpack('bbHHh', recv_packet[20:28])
+
+            print "{0}\t{1}\t{2} ms".format(hopNum, addr[0], elapsed)
+
+            # If we are at the destination, we're done
+            if(addr[0] == dst_ip):
+                sys.exit()
+        else:
+            print "Request timed out"
+
+    def make_socket(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_RAW,
+                              socket.IPPROTO_ICMP)
+        except socket.error as e:
+            print e
+            sys.exit()
+        return s
+
+    def gethostname(self, dst):
+        try:
+            dst_ip = socket.gethostbyname(dst)
+        except socket.gaierror as e:
+            print e
+            sys.exit()
+        return dst_ip
+
+    def ping(self, dst, seq=0):
+        # Convert the url to an IP
+        dst_ip = self.gethostname(dst)
+        s = self.make_socket()
+        packet = self.icmp(seq)
+        start_time = time.time()
+        s.sendto(packet, (dst_ip, 1))
+        self.recv(s, start_time)
+
+    def ping_many(self, dst, count=0):
+        try:
+            if(count > 0):
+                for i in range(count):
+                    self.ping(dst, i)
+                    time.sleep(1)
+            else:
+                seq = 0
+                while True:
+                    self.ping(dst, seq)
+                    seq += 1
+                    time.sleep(1)
+        except KeyboardInterrupt:
+            self.samples.print_summary(dst)
+            sys.exit()
+        self.samples.print_summary(dst)
 
     def recv(self, s, start_time):
         # Wait until data is available or timeout occurs
@@ -44,91 +131,6 @@ class Pinger:
         else:
             self.samples.add(1, False)
             print "Request timed out"
-
-    def traceroute(self, dst, max_hops):
-
-        dst_ip = self.gethostname(dst)
-        for i in range(1, max_hops):
-            s = self.make_socket()
-            s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, pack('I', i))
-
-            packet = self.icmp(i)
-            sent = s.sendto(packet, (dst_ip, 1))
-            self.recv_tracert(s, time.time(), dst_ip, i)
-
-    def recv_tracert(self, s, start_time, dst_ip, hopNum):
-        # Wait until data is available or timeout occurs
-        ready = select.select([s], [], [], 1)
-        if ready[0]:
-            recv_packet, addr = s.recvfrom(1024)
-
-            elapsed = 1000 * (time.time() - start_time)
-            ip = unpack('!BBHHHBBH4s4s', recv_packet[:20])
-            icmp = unpack('bbHHh', recv_packet[20:28])
-
-            print "{0}\t{1}".format(hopNum, addr[0])
-
-            # If we are at the destination, we're done
-            if(addr[0] == dst_ip):
-                sys.exit()
-        else:
-            print "Request timed out"
-
-    def make_socket(self):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-        except socket.error as e:
-            print e
-            sys.exit()
-        return s
-
-    def gethostname(self, dst):
-        try:
-            dst_ip = socket.gethostbyname(dst)
-        except socket.gaierror as e:
-            print e
-            return
-        return dst_ip
-
-    def ping(self, dst, seq=0):
-        # Convert the url to an IP
-        dst_ip = self.gethostname(dst)
-        s = self.make_socket()
-        packet = self.icmp(seq)
-        start_time = time.time()
-        sent = s.sendto(packet, (dst_ip, 1))
-        self.recv(s, start_time)
-
-    def icmp(self, seq=0):
-        typ = 8
-        code = 0
-        p_id = random.randint(0, 65535)
-
-        # Create the header so that we can fill in the CRC
-        header = pack('bbHHh', typ, code, 0, p_id, seq)
-        payload = "A" * 36
-
-        # Fill in the CRC for the packet
-        crc = socket.htons(self.checksum(header + payload))
-        header = pack('bbHHh', typ, code, crc, p_id, seq)
-        return header + payload
-
-    def ping_many(self, dst, count=0):
-        try:
-            if(count > 0):
-                for i in range(count):
-                    self.ping(dst, i)
-                    time.sleep(1)
-            else:
-                seq = 0
-                while True:
-                    self.ping(dst, seq)
-                    seq += 1
-                    time.sleep(1)
-        except KeyboardInterrupt:
-            self.samples.print_summary(dst)
-            sys.exit()
-        self.samples.print_summary(dst)
 
 
 class Sample:
@@ -220,13 +222,18 @@ class SampleList:
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-t", help="Run a traceroute instead of a ping", action="store_true")
+    parser.add_argument("dest", help="IP address or domain to traceroute/ping")
+    parser.add_argument(
+        'count', help='In ping mode, the # of pings to send. In traceroute mode, max hops', nargs='?', type=int, default=0)
+    args = parser.parse_args()
+
     pinger = Pinger()
-
-    if len(sys.argv) < 3:
-        count = 0
+    if(args.t):
+        if not args.count:
+            args.count = 30
+        pinger.traceroute(args.dest, args.count)
     else:
-        count = int(sys.argv[2])
-    dst = sys.argv[1]
-
-    pinger.traceroute(dst, 30)
-    pinger.ping_many(dst, count)
+        pinger.ping_many(args.dest, args.count)
