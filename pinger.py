@@ -27,7 +27,7 @@ class Pinger:
         shift = (s >> 8) & 0xFF
         return (shift | s << 8) & 0xFFFF
 
-    def recv(self, s, p_id, start_time):
+    def recv(self, s, start_time):
         # Wait until data is available or timeout occurs
         ready = select.select([s], [], [], 1)
         if ready[0]:
@@ -45,18 +45,18 @@ class Pinger:
             self.samples.add(1, False)
             print "Request timed out"
 
-    def traceroute(self, dst):
-        dst_ip = self.gethostname(dst);
-        for i in range(10):
+    def traceroute(self, dst, max_hops):
+
+        dst_ip = self.gethostname(dst)
+        for i in range(1, max_hops):
             s = self.make_socket()
             s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, pack('I', i))
-            p_id = random.randint(0, 65535)
 
-            packet = self.icmp(p_id, i)
+            packet = self.icmp(i)
             sent = s.sendto(packet, (dst_ip, 1))
-            self.recv_tracert(s, p_id, time.time(), dst)
+            self.recv_tracert(s, time.time(), dst_ip, i)
 
-    def recv_tracert(self, s, p_id, start_time, dst):
+    def recv_tracert(self, s, start_time, dst_ip, hopNum):
         # Wait until data is available or timeout occurs
         ready = select.select([s], [], [], 1)
         if ready[0]:
@@ -65,17 +65,18 @@ class Pinger:
             elapsed = 1000 * (time.time() - start_time)
             ip = unpack('!BBHHHBBH4s4s', recv_packet[:20])
             icmp = unpack('bbHHh', recv_packet[20:28])
-            hopNum = ip[5]
 
             print "{0}\t{1}".format(hopNum, addr[0])
+
+            # If we are at the destination, we're done
+            if(addr[0] == dst_ip):
+                sys.exit()
         else:
             print "Request timed out"
 
     def make_socket(self):
-        # Create the socket
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_RAW,
-                              socket.IPPROTO_ICMP)
+            s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
         except socket.error as e:
             print e
             sys.exit()
@@ -93,15 +94,15 @@ class Pinger:
         # Convert the url to an IP
         dst_ip = self.gethostname(dst)
         s = self.make_socket()
-        p_id = random.randint(0, 65535)
-        packet = self.icmp(p_id, seq)
+        packet = self.icmp(seq)
         start_time = time.time()
         sent = s.sendto(packet, (dst_ip, 1))
-        self.recv(s, p_id, start_time)
+        self.recv(s, start_time)
 
-    def icmp(self, p_id, seq=0):
+    def icmp(self, seq=0):
         typ = 8
         code = 0
+        p_id = random.randint(0, 65535)
 
         # Create the header so that we can fill in the CRC
         header = pack('bbHHh', typ, code, 0, p_id, seq)
@@ -173,7 +174,7 @@ class SampleList:
     def variance(self):
         avg = self.avg()
         received = self.received()
-        avg_diff = map(lambda x: (x.rtt - avg)**2, received)
+        avg_diff = map(lambda x: (x.rtt - avg) ** 2, received)
         return sum(avg_diff) / len(avg_diff)
 
     def std_dev(self):
@@ -227,4 +228,5 @@ if __name__ == '__main__':
         count = int(sys.argv[2])
     dst = sys.argv[1]
 
-    pinger.traceroute(dst)
+    pinger.traceroute(dst, 30)
+    pinger.ping_many(dst, count)
